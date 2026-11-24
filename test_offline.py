@@ -53,6 +53,24 @@ txt = "A" * 9000 + "B" * 9000 + "FIN"
 ex = r.excerpt(txt, 12000)
 ok(len(ex) < 12100 and ex.startswith("A") and ex.endswith("FIN"), "extrait garde le debut et la fin")
 
+# --- JSON-LD : auteur designe par @id, puis repris plus loin en simple reference
+blocks = [json.dumps({"@context": "https://schema.org", "@graph": [
+	{"@type": "Person", "@id": "https://ex.test/auteur/1#author", "name": "Jeanne Martin", "url": "https://ex.test/auteur/1"},
+	{"@type": "Article", "headline": "Torrefier", "author": {"@id": "https://ex.test/auteur/1#author"}},
+	{"@type": "WebPage", "author": {"@id": "https://ex.test/auteur/1#author"}}]})]
+ok(r.jsonld_facts(blocks)[0] == "Jeanne Martin", "auteur par @id garde meme si une simple reference suit sa definition")
+
+# --- la charte editoriale compte comme page A propos (adresse ou texte du lien)
+path_re, text_re = r.SITE_PAGES["a_propos"]
+ok(re.search(path_re, "/charte-editoriale") and re.search(path_re, "/notre-charte-editoriale-2024/")
+	and re.search(text_re, "charte éditoriale") and not re.search(path_re, "/charte-graphique"), "charte editoriale reconnue comme A propos")
+
+# --- requetes Search Console d'une page redirigee : rattachees via l'adresse demandee
+qs = {r.page_key("https://ex.test/ancien-titre-123"): {"url": "https://ex.test/ancien-titre-123", "queries": [(9, 90, "cafe vert")], "clicks": 9}}
+pgs = [{"url": "https://ex.test/nouveau-titre-123", "requested": "https://ex.test/ancien-titre-123"}, {"url": "https://ex.test/autre"}]
+ok(hasattr(r, "attach_queries") and r.attach_queries(pgs, qs) == 1 and pgs[0]["queries"] == [(9, 90, "cafe vert")] and pgs[1]["queries"] == [],
+	"page redirigee : requetes de l'adresse demandee gardees")
+
 # --- tableur : pas de formule
 ok(r.cell("=HYPERLINK(1)") == "'=HYPERLINK(1)" and r.cell("ok") == "ok" and r.cell(3) == 3, "cellules protegees des formules")
 

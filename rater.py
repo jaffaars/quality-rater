@@ -362,7 +362,13 @@ def jsonld_facts(blocks):
 			walk(json.loads(b.strip().removeprefix("<![CDATA[").removesuffix("]]>")))
 		except ValueError:
 			pass
-	by_id = {n["@id"]: n for n in nodes if isinstance(n.get("@id"), str)}
+	# un meme @id peut revenir plus loin en simple reference ({"@id": ...}) : garder le noeud le plus complet,
+	# sinon la reference ecrase la definition et l'auteur designe par @id est perdu
+	by_id = {}
+	for n in nodes:
+		i = n.get("@id")
+		if isinstance(i, str) and len(n) > len(by_id.get(i, {})):
+			by_id[i] = n
 	types, author, dates = set(), "", {}
 	for n in nodes:
 		t = n.get("@type")
@@ -548,8 +554,10 @@ class LinkParser(HTMLParser):
 
 
 SITE_PAGES = {
+	# la charte editoriale tient lieu de page A propos sur beaucoup de sites de presse
 	"a_propos": (r"/(a-?propos|qui-sommes-nous|qui-suis-je|about|about-us|notre-histoire|l-?equipe|notre-equipe|team"
-		r"|presentation)/?$", r"^(a propos|à propos|qui sommes-nous|qui suis-je|about|notre histoire|l'équipe|notre équipe)"),
+		r"|presentation|(notre-)?charte-editoriale[\w-]*)/?$",
+		r"^(a propos|à propos|qui sommes-nous|qui suis-je|about|notre histoire|l'équipe|notre équipe|(notre )?charte [ée]ditoriale)"),
 	"contact": (r"/(contact|nous-contacter|contactez-nous|contact-us)/?$|^mailto:", r"^(contact|nous contacter|contactez-nous)"),
 	"mentions_legales": (r"/(mentions-legales|informations-legales|legal-notice|legal|imprint|impressum)/?$",
 		r"mentions l[ée]gales|informations l[ée]gales|legal notice|imprint|impressum"),
@@ -1024,6 +1032,17 @@ def rate_pages(cfg, cache, pages, sites, a, workers, prefix=""):
 		return [r for r in pool.map(one, enumerate(pages, 1)) if r]
 
 
+def attach_queries(pages, queries):
+	"""Requetes Search Console de chaque page : a son adresse finale, sinon a l'adresse demandee
+	(une page redirigee garde dans l'export les requetes de son ancienne adresse). Renvoie le nombre de pages servies."""
+	matched = 0
+	for p in pages:
+		q = queries.get(page_key(p["url"])) or queries.get(page_key(p.get("requested") or p["url"]))
+		p["queries"] = q["queries"] if q else []
+		matched += bool(q)
+	return matched
+
+
 def rate_site(url, a, cfg, cache, queries, exclude, out, workers, prefix=""):
 	"""Un site de bout en bout : pages, transparence, notation, synthese et rapports.
 	Renvoie sa ligne du tableau de reseau, ou None si aucune page n'a pu etre notee."""
@@ -1034,7 +1053,9 @@ def rate_site(url, a, cfg, cache, queries, exclude, out, workers, prefix=""):
 		for u in a.url:
 			try:
 				res = fetch(u)
-				pages.append(parse(clean(res["url"]), res["text"], res["x_robots"]))
+				pg = parse(clean(res["url"]), res["text"], res["x_robots"])
+				pg["requested"] = clean(u)  # adresse donnee, avant redirection : c'est elle que connait la Search Console
+				pages.append(pg)
 			except Exception as e:
 				log(f"{prefix}  ! {u} : {e}")
 	else:
@@ -1055,11 +1076,7 @@ def rate_site(url, a, cfg, cache, queries, exclude, out, workers, prefix=""):
 			sites[host(p["url"])] = site_signals(f"{pu.scheme}://{pu.netloc}/")
 	site = sites.get(host(url)) or next(iter(sites.values()))
 	if queries:
-		matched = 0
-		for p in pages:
-			q = queries.get(page_key(p["url"]))
-			p["queries"] = q["queries"] if q else []
-			matched += bool(q)
+		matched = attach_queries(pages, queries)
 		log(f"{prefix}  requetes Search Console trouvees pour {matched} pages sur {len(pages)}")
 	log(f"{prefix}Notation de {len(pages)} pages avec {cfg['model']} ...")
 	results = rate_pages(cfg, cache, pages, sites, a, workers, prefix)
